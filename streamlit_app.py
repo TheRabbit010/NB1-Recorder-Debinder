@@ -12,7 +12,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 2. บังคับ Dark Mode CSS และซ่อนแถบขาวด้านบน (stHeader / stToolbar)
+# 2. บังคับ Dark Mode CSS ปรับสีองค์ประกอบทั้งหมดจากสีขาวเป็นสีเทาเข้ม/เทาอ่อน
 st.markdown("""
     <style>
         /* ซ่อนแถบขาว Header ด้านบน */
@@ -36,7 +36,7 @@ st.markdown("""
             color: #ffffff !important;
         }
 
-        /* ปุ่มเคลียร์ข้อมูล */
+        /* ปุ่มเคลียร์ข้อมูลใน Sidebar */
         [data-testid="stSidebar"] div.stButton > button {
             background-color: #21262d !important;
             color: #ffffff !important;
@@ -81,13 +81,66 @@ st.markdown("""
             color: #ffffff !important;
             font-weight: bold !important;
         }
-        [data-testid="stFileUploaderFile"] button,
-        [data-testid="stFileUploaderFileData"] button {
-            background-color: transparent !important;
-            color: #F0B90B !important;
+
+        /* ------------------------------------------------------------------ */
+        /* ปรับแต่งส่วนที่มีสีขาวในภาพเป็นสีเทาอ่อน/เทาเข้ม (Dark-Grey Styling) */
+        /* ------------------------------------------------------------------ */
+
+        /* 1. ปรับแถบ Expander */
+        [data-testid="stExpander"] {
+            background-color: #161b22 !important;
+            border: 1px solid #30363d !important;
+            border-radius: 8px !important;
         }
-        [data-testid="stFileUploaderFile"] button:hover {
-            color: #ff4b4b !important;
+        [data-testid="stExpander"] details summary {
+            background-color: #21262d !important;
+            color: #ffffff !important;
+            border-radius: 8px !important;
+        }
+        [data-testid="stExpander"] details summary * {
+            color: #ffffff !important;
+        }
+
+        /* 2. ปรับแต่งตาราง Dataframe จากสีขาวเป็นสีเทา */
+        [data-testid="stDataFrame"] {
+            background-color: #161b22 !important;
+            border: 1px solid #30363d !important;
+            border-radius: 8px !important;
+        }
+        div[data-testid="stDataFrame"] div[role="grid"] {
+            background-color: #161b22 !important;
+            color: #ffffff !important;
+        }
+        div[data-testid="stDataFrame"] div[role="columnheader"] {
+            background-color: #21262d !important;
+            color: #ffffff !important;
+        }
+
+        /* 3. ปรับแต่งกล่องพิมพ์ข้อความ (Text Input) */
+        div[data-baseweb="input"] {
+            background-color: #21262d !important;
+            border: 1px solid #30363d !important;
+            color: #ffffff !important;
+            border-radius: 6px !important;
+        }
+        div[data-baseweb="input"] input {
+            background-color: #21262d !important;
+            color: #ffffff !important;
+        }
+
+        /* 4. ปรับแต่งปุ่มดาวน์โหลด Excel */
+        div.stDownloadButton > button {
+            background-color: #21262d !important;
+            color: #F0B90B !important;
+            border: 1px solid #F0B90B !important;
+            font-weight: bold !important;
+            border-radius: 6px !important;
+            transition: all 0.2s ease-in-out;
+        }
+        div.stDownloadButton > button:hover {
+            background-color: #F0B90B !important;
+            color: #000000 !important;
+            border-color: #F0B90B !important;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -163,9 +216,7 @@ def process_multiple_files(uploaded_files):
 # ฟังก์ชันแปลง DataFrame เป็น Binary สำหรับดาวน์โหลดเป็นไฟล์ Excel (.xlsx)
 def to_excel_bytes(dataframe):
     output = io.BytesIO()
-    # ใช้ openpyxl ในการสร้างไฟล์ Excel
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # ตัด Timezone ออกเพื่อให้เขียนลง Excel ได้อย่างปลอดภัย
         df_export = dataframe.copy()
         if pd.api.types.is_datetime64_any_dtype(df_export["DateTime"]):
             df_export["DateTime"] = df_export["DateTime"].dt.strftime('%Y-%m-%d %H:%M:%S')
@@ -291,7 +342,7 @@ if uploaded_files:
 
         st.plotly_chart(fig, use_container_width=True)
 
-        # ส่วนตรวจสอบและสร้างตัวเลือกดาวน์โหลด Excel (.xlsx)
+        # ส่วนตรวจสอบและเลือกดาวน์โหลด Excel (.xlsx)
         with st.expander("📋 ตรวจสอบและเลือกดาวน์โหลดตารางข้อมูล Excel (.xlsx)"):
             st.dataframe(df)
             
