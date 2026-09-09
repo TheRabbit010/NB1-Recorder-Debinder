@@ -83,18 +83,32 @@ st.markdown("""
 
 st.title("🏭 Recorder NB1 Debinder")
 
-# 2. ฟังก์ชันอ่านไฟล์อย่างปลอดภัย
+# 2. ฟังก์ชันอ่านไฟล์อย่างปลอดภัย (แก้ไขรองรับการสลับ Encoding อัตโนมัติ)
 def read_excel_safe(uploaded_file):
     file_name = uploaded_file.name.lower()
+    
     if file_name.endswith('.csv'):
-        return pd.read_csv(uploaded_file, header=None, low_memory=False)
+        # วนลูปสลับ Encoding ที่ใช้ในเครื่องมือวัดอุตสาหกรรม
+        encodings = ['cp932', 'shift_jis', 'utf-8', 'utf-8-sig', 'tis-620', 'latin1']
+        for enc in encodings:
+            try:
+                uploaded_file.seek(0)
+                return pd.read_csv(uploaded_file, header=None, low_memory=False, encoding=enc)
+            except Exception:
+                continue
+        # กรณีล้มเหลวทุกกรณี ให้ข้ามตัวอักษรที่ถอดรหัสไม่ได้
+        uploaded_file.seek(0)
+        return pd.read_csv(uploaded_file, header=None, low_memory=False, encoding='utf-8', errors='ignore')
     
     try:
+        uploaded_file.seek(0)
         return pd.read_excel(uploaded_file, header=None, engine='openpyxl')
     except Exception:
         try:
+            uploaded_file.seek(0)
             return pd.read_excel(uploaded_file, header=None, engine='xlrd')
         except Exception:
+            uploaded_file.seek(0)
             return pd.read_excel(uploaded_file, header=None)
 
 # 3. ฟังก์ชันสแกนและดึงข้อมูลอัจฉริยะสำหรับ Debinder (Z#1-4 และ Combustion)
@@ -254,7 +268,7 @@ if uploaded_files:
                 secondary_y=False
             )
 
-        # เพิ่มเส้น Combustion Air Temp อยู่แกน Y ขวา (สีส้ม/ทอง)
+        # เพิ่มเส้น Combustion Air Temp อยู่แกน Y ขวา
         fig.add_trace(
             go.Scatter(
                 x=df["DateTime"],
