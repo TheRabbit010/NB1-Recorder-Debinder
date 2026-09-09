@@ -86,7 +86,7 @@ st.markdown("""
 # 3. แสดงชื่อโปรแกรมหลักเสมอ
 st.title("🏭 Recorder NB1 Debinder")
 
-# 4. ฟังก์ชันอ่าน CSV อย่างปลอดภัยโดยใช้ io.StringIO
+# 4. ฟังก์ชันอ่าน CSV อย่างปลอดภัย + รองรับการ Split บรรทัดที่ Comma หลุด
 def read_csv_safe(uploaded_file):
     uploaded_file.seek(0)
     raw_bytes = uploaded_file.read()
@@ -105,7 +105,13 @@ def read_csv_safe(uploaded_file):
         text_content = raw_bytes.decode('utf-8', errors='ignore')
 
     string_io = io.StringIO(text_content)
-    return pd.read_csv(string_io, header=None, low_memory=False, on_bad_lines='skip')
+    df = pd.read_csv(string_io, header=None, low_memory=False, on_bad_lines='skip')
+
+    # หากอ่านได้คอลัมน์เดียวเนื่องจาก Header ไม่ขึ้นบรรทัดใหม่ ให้ทำการ Split แยกด้วย Comma
+    if df.shape[1] == 1:
+        df = df[0].astype(str).str.split(',', expand=True)
+
+    return df
 
 # 5. ฟังก์ชันสแกนและดึงข้อมูลจากโครงสร้าง Yokogawa CSV
 def parse_single_file(uploaded_file):
@@ -116,13 +122,14 @@ def parse_single_file(uploaded_file):
     data_start_row = None
     endheader_cols = []
 
-    # สแกนหาตำแหน่งบรรทัดเริ่มต้นของข้อมูล
+    # สแกนหาบรรทัดข้อมูลจริง
     for idx in range(len(raw_df)):
-        first_cell = str(raw_df.iloc[idx, 0]).strip()
+        row_str = " ".join(raw_df.iloc[idx].fillna('').astype(str))
         
-        if first_cell.startswith("#EndHeader"):
+        if "#EndHeader" in row_str:
             endheader_cols = raw_df.iloc[idx].fillna('').astype(str).tolist()
             
+        first_cell = str(raw_df.iloc[idx, 0]).strip()
         if date_pattern.search(first_cell):
             data_start_row = idx
             break
@@ -132,23 +139,21 @@ def parse_single_file(uploaded_file):
 
     data_df = raw_df.iloc[data_start_row:].copy().reset_index(drop=True)
 
-    # ค้นหาคอลัมน์อัตโนมัติจากบรรทัด #EndHeader หรือใช้ Index มาตรฐานของ Yokogawa
+    # ค้นหาคอลัมน์ของแต่ละ Channel
     def get_col_index(ch_num):
-        # 1. พยายามหาจากคำว่า TH_CH{num}Ave หรือ TH_CH{num} ใน #EndHeader
         if endheader_cols:
             for c_idx, text in enumerate(endheader_cols):
                 if f"TH_CH{ch_num}Ave" in text or f"TH_CH{ch_num}Max" in text:
                     return c_idx
 
-        # 2. Fallback Index สำหรับ Yokogawa Recorder Standard
-        # Col 0: DateTime, Col 1: ms
+        # Index มาตรฐาน Yokogawa Recorder (Col 0: DateTime, Col 1: ms)
         # CH1 = 4, CH2 = 7, CH3 = 10, CH4 = 13, CH5 = 16
         fallback_map = {1: 4, 2: 7, 3: 10, 4: 13, 5: 16}
         return fallback_map.get(ch_num, None)
 
     df = pd.DataFrame()
 
-    # สกัด Date/Time จาก Col 0
+    # สกัด DateTime จาก Col 0
     dt_clean = data_df[0].astype(str).str.extract(r'(\d{2,4}[-/]\d{1,2}[-/]\d{1,2}\s+\d{1,2}:\d{2}:\d{2})')[0]
     df["DateTime"] = pd.to_datetime(dt_clean, errors="coerce")
 
