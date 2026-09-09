@@ -2,10 +2,9 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
-import re
 import io
 
-# 1. ตั้งค่า Page Config เป็นบรรทัดแรกสุด
+# 1. ตั้งค่า Page Config
 st.set_page_config(
     page_title="Recorder NB1 Debinder",
     page_icon="🏭",
@@ -13,7 +12,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 2. ฉีด CSS บังคับ Dark Mode
+# 2. บังคับ Dark Mode CSS
 st.markdown("""
     <style>
         html, body, .stApp, [data-testid="stAppViewContainer"] {
@@ -83,120 +82,79 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 3. แสดงชื่อโปรแกรมหลักเสมอ
+# 3. ชื่อโปรแกรม
 st.title("🏭 Recorder NB1 Debinder")
 
-# 4. ฟังก์ชันอ่าน CSV อย่างปลอดภัย + รองรับการ Split บรรทัดที่ Comma หลุด
-def read_csv_safe(uploaded_file):
+# 4. ฟังก์ชันอ่านไฟล์ทีละบรรทัดและดึงคอลัมน์ตรงๆ
+def parse_single_file(uploaded_file):
     uploaded_file.seek(0)
     raw_bytes = uploaded_file.read()
     
+    # ลอง Decode หาภาษาที่ถูกต้อง
     text_content = None
-    encodings = ['cp932', 'shift_jis', 'utf-8-sig', 'utf-8', 'tis-620', 'latin1']
-    
-    for enc in encodings:
+    for enc in ['cp932', 'shift_jis', 'utf-8', 'tis-620', 'latin1']:
         try:
             text_content = raw_bytes.decode(enc)
             break
-        except UnicodeDecodeError:
+        except Exception:
             continue
             
     if text_content is None:
         text_content = raw_bytes.decode('utf-8', errors='ignore')
 
-    string_io = io.StringIO(text_content)
-    df = pd.read_csv(string_io, header=None, low_memory=False, on_bad_lines='skip')
-
-    # หากอ่านได้คอลัมน์เดียวเนื่องจาก Header ไม่ขึ้นบรรทัดใหม่ ให้ทำการ Split แยกด้วย Comma
-    if df.shape[1] == 1:
-        df = df[0].astype(str).str.split(',', expand=True)
-
-    return df
-
-# 5. ฟังก์ชันสแกนและดึงข้อมูลจากโครงสร้าง Yokogawa CSV
-def parse_single_file(uploaded_file):
-    raw_df = read_csv_safe(uploaded_file)
-
-    date_pattern = re.compile(r'^\d{2,4}[-/]\d{1,2}[-/]\d{1,2}')
+    lines = text_content.splitlines()
     
-    data_start_row = None
-    endheader_cols = []
-
-    # สแกนหาบรรทัดข้อมูลจริง
-    for idx in range(len(raw_df)):
-        row_str = " ".join(raw_df.iloc[idx].fillna('').astype(str))
-        
-        if "#EndHeader" in row_str:
-            endheader_cols = raw_df.iloc[idx].fillna('').astype(str).tolist()
+    parsed_rows = []
+    
+    for line in lines:
+        line_str = line.strip()
+        # สนใจเฉพาะบรรทัดที่ขึ้นต้นด้วยปี ค.ศ. (เช่น 2026/07/13)
+        if line_str.startswith("20") and "," in line_str:
+            parts = [p.strip() for p in line_str.split(",")]
             
-        first_cell = str(raw_df.iloc[idx, 0]).strip()
-        if date_pattern.search(first_cell):
-            data_start_row = idx
-            break
+            # ต้องมีคอลัมน์อย่างน้อย 17 คอลัมน์ (Index 0 ถึง 16)
+            if len(parts) >= 17:
+                try:
+                    dt_val = parts[0]
+                    z1 = float(parts[4])   # TH_CH1Ave.
+                    z2 = float(parts[7])   # TH_CH2Ave.
+                    z3 = float(parts[10])  # TH_CH3Ave.
+                    z4 = float(parts[13])  # TH_CH4Ave.
+                    comb = float(parts[16]) # TH_CH5Ave.
+                    
+                    parsed_rows.append({
+                        "DateTime": dt_val,
+                        "Zone #1": z1,
+                        "Zone #2": z2,
+                        "Zone #3": z3,
+                        "Zone #4": z4,
+                        "Combustion Air Temp": comb
+                    })
+                except ValueError:
+                    continue
 
-    if data_start_row is None:
-        return pd.DataFrame(), {}
+    if not parsed_rows:
+        return pd.DataFrame()
 
-    data_df = raw_df.iloc[data_start_row:].copy().reset_index(drop=True)
-
-    # ค้นหาคอลัมน์ของแต่ละ Channel
-    def get_col_index(ch_num):
-        if endheader_cols:
-            for c_idx, text in enumerate(endheader_cols):
-                if f"TH_CH{ch_num}Ave" in text or f"TH_CH{ch_num}Max" in text:
-                    return c_idx
-
-        # Index มาตรฐาน Yokogawa Recorder (Col 0: DateTime, Col 1: ms)
-        # CH1 = 4, CH2 = 7, CH3 = 10, CH4 = 13, CH5 = 16
-        fallback_map = {1: 4, 2: 7, 3: 10, 4: 13, 5: 16}
-        return fallback_map.get(ch_num, None)
-
-    df = pd.DataFrame()
-
-    # สกัด DateTime จาก Col 0
-    dt_clean = data_df[0].astype(str).str.extract(r'(\d{2,4}[-/]\d{1,2}[-/]\d{1,2}\s+\d{1,2}:\d{2}:\d{2})')[0]
-    df["DateTime"] = pd.to_datetime(dt_clean, errors="coerce")
-
-    def extract_series(col_idx, min_val=-50.0, max_val=2000.0):
-        if col_idx is not None and col_idx < data_df.shape[1]:
-            s = pd.to_numeric(data_df[col_idx], errors="coerce")
-            s = s.apply(lambda x: x if (pd.notna(x) and min_val <= x <= max_val) else None)
-            return s
-        return pd.Series([None] * len(data_df))
-
-    mapping_info = {}
-
-    # Map Zone 1 - 4
-    for i in range(1, 5):
-        c = get_col_index(i)
-        df[f"Zone #{i}"] = extract_series(c, min_val=0.0, max_val=1000.0)
-        mapping_info[f"Zone #{i}"] = f"Col {c}" if c is not None else "Not Found"
-
-    # Map Combustion Air Temp (CH 5)
-    c5 = get_col_index(5)
-    df["Combustion Air Temp"] = extract_series(c5, min_val=0.0, max_val=500.0)
-    mapping_info["Combustion Air Temp"] = f"Col {c5}" if c5 is not None else "Not Found"
-
-    valid_df = df.dropna(subset=["DateTime"]).reset_index(drop=True)
-    return valid_df, mapping_info
+    df = pd.DataFrame(parsed_rows)
+    df["DateTime"] = pd.to_datetime(df["DateTime"], errors="coerce")
+    return df.dropna(subset=["DateTime"]).reset_index(drop=True)
 
 def process_multiple_files(uploaded_files):
     combined_dfs = []
-    logs = {}
     for file in uploaded_files:
-        single_df, mapping = parse_single_file(file)
-        if not single_df.empty:
-            combined_dfs.append(single_df)
-        logs[file.name] = mapping
-    
+        df_single = parse_single_file(file)
+        if not df_single.empty:
+            combined_dfs.append(df_single)
+            
     if not combined_dfs:
-        return pd.DataFrame(), logs
+        return pd.DataFrame()
 
     full_df = pd.concat(combined_dfs, ignore_index=True)
     full_df = full_df.drop_duplicates(subset=["DateTime"]).sort_values("DateTime").reset_index(drop=True)
-    return full_df, logs
+    return full_df
 
-# 6. เมนู Sidebar
+# 5. เมนู Sidebar
 st.sidebar.header("📁 เมนูอัปโหลดข้อมูล")
 
 if st.sidebar.button("🧹 เคลียร์ข้อมูลไฟล์เก่าทั้งหมด"):
@@ -209,126 +167,123 @@ uploaded_files = st.sidebar.file_uploader(
     accept_multiple_files=True
 )
 
-# 7. ส่วนแสดงผลกราฟ
+# 6. แสดงผลกราฟ
 if uploaded_files:
-    try:
-        raw_df, channel_logs = process_multiple_files(uploaded_files)
+    raw_df = process_multiple_files(uploaded_files)
+    
+    if raw_df.empty:
+        st.error("⚠️ ไม่สามารถอ่านข้อมูลจากไฟล์ที่อัปโหลดได้ กรุณาตรวจสอบว่าเป็นไฟล์ CSV จากเครื่อง Recorder หรือไม่")
+    else:
+        st.sidebar.success(f"รวมข้อมูลสำเร็จ {len(uploaded_files)} ไฟล์ ({len(raw_df)} แถว)")
+
+        st.sidebar.markdown("---")
+        st.sidebar.header("🎛️ Dynamic Controls")
         
-        if raw_df.empty:
-            st.error("⚠️ ไม่พบข้อมูลวันเวลา (DateTime) ที่ถูกต้องในไฟล์ที่อัปโหลด กรุณาตรวจสอบรูปแบบไฟล์ CSV")
-            with st.sidebar.expander("🔍 ตรวจสอบการสแกนจับคู่คอลัมน์"):
-                st.json(channel_logs)
-        else:
-            st.sidebar.success(f"รวมข้อมูลสำเร็จ {len(uploaded_files)} ไฟล์ ({len(raw_df)} แถว)")
+        min_time = raw_df["DateTime"].min().to_pydatetime()
+        max_time = raw_df["DateTime"].max().to_pydatetime()
+        
+        selected_time = st.sidebar.slider(
+            "⏱️ ช่วงเวลา:",
+            min_value=min_time,
+            max_value=max_time,
+            value=(min_time, max_time),
+            format="MM-DD HH:mm"
+        )
+        
+        df = raw_df[(raw_df["DateTime"] >= selected_time[0]) & (raw_df["DateTime"] <= selected_time[1])].copy()
 
-            with st.sidebar.expander("🔍 ตรวจสอบการสแกนจับคู่คอลัมน์"):
-                st.json(channel_logs)
+        st.subheader("📊 Debinder Temperature & Combustion Air Monitor")
 
-            st.sidebar.markdown("---")
-            st.sidebar.header("🎛️ Dynamic Controls")
-            
-            min_time = raw_df["DateTime"].min().to_pydatetime()
-            max_time = raw_df["DateTime"].max().to_pydatetime()
-            
-            selected_time = st.sidebar.slider(
-                "⏱️ ช่วงเวลา:",
-                min_value=min_time,
-                max_value=max_time,
-                value=(min_time, max_time),
-                format="MM-DD HH:mm"
-            )
-            
-            df = raw_df[(raw_df["DateTime"] >= selected_time[0]) & (raw_df["DateTime"] <= selected_time[1])].copy()
+        # สร้างกราฟ 2 แกน Y
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        zone_colors = ["#FF0000", "#008000", "#0000FF", "#8A2BE2"]
 
-            st.subheader("📊 Debinder Temperature & Combustion Air Monitor")
-
-            fig = make_subplots(specs=[[{"secondary_y": True}]])
-            zone_colors = ["#FF0000", "#008000", "#0000FF", "#8A2BE2"]
-
-            for i in range(1, 5):
-                fig.add_trace(
-                    go.Scatter(
-                        x=df["DateTime"],
-                        y=df[f"Zone #{i}"],
-                        name=f"Zone #{i}",
-                        mode="lines",
-                        line=dict(color=zone_colors[i-1], width=2)
-                    ),
-                    secondary_y=False
-                )
-
+        # 1. Zone #1 - #4 (แกน Y ซ้ายมือ)
+        for i in range(1, 5):
             fig.add_trace(
                 go.Scatter(
                     x=df["DateTime"],
-                    y=df["Combustion Air Temp"],
-                    name="Combustion Air Temp",
+                    y=df[f"Zone #{i}"],
+                    name=f"Zone #{i}",
                     mode="lines",
-                    line=dict(color="#FFA500", width=2, dash="dash")
+                    line=dict(color=zone_colors[i-1], width=2)
                 ),
-                secondary_y=True
+                secondary_y=False
             )
 
-            fig.update_layout(
-                template="plotly_dark",
-                plot_bgcolor="#161b22",
-                paper_bgcolor="#0e1117",
-                hovermode="x unified",
-                showlegend=True,
-                legend=dict(
-                    font=dict(color="#FFFFFF", size=12, family="Arial Bold"),
-                    bgcolor="rgba(27, 31, 36, 0.95)",
-                    bordercolor="#F0B90B",
-                    borderwidth=1.5,
-                    orientation="v",
-                    yanchor="top",
-                    y=1,
-                    xanchor="left",
-                    x=1.05
-                ),
-                xaxis=dict(
-                    title=dict(text="Absolute Time [Date & Time]", font=dict(color="#FFFFFF", size=12)),
-                    tickfont=dict(color="#CCCCCC", size=10),
-                    showgrid=True,
-                    gridcolor="rgba(255,255,255,0.08)",
-                    linecolor="#555555",
-                    type="date"
-                ),
-                yaxis=dict(
-                    title=dict(text="Zone Temperature (°C) [0 - 400°C]", font=dict(color="#FFFFFF", size=12)),
-                    tickfont=dict(color="#CCCCCC", size=10),
-                    showgrid=True,
-                    gridcolor="rgba(255,255,255,0.08)",
-                    zeroline=False,
-                    linecolor="#555555",
-                    range=[0, 400]
-                ),
-                yaxis2=dict(
-                    title=dict(text="Combustion Air Temp (°C) [0 - 150°C]", font=dict(color="#FFA500", size=12)),
-                    tickfont=dict(color="#FFA500", size=10),
-                    showgrid=False,
-                    overlaying="y",
-                    side="right",
-                    linecolor="#FFA500",
-                    range=[0, 150]
-                ),
-                height=500,
-                margin=dict(l=60, r=180, t=30, b=40)
+        # 2. Combustion Air Temp (แกน Y ขวามือ)
+        fig.add_trace(
+            go.Scatter(
+                x=df["DateTime"],
+                y=df["Combustion Air Temp"],
+                name="Combustion Air Temp",
+                mode="lines",
+                line=dict(color="#FFA500", width=2, dash="dash")
+            ),
+            secondary_y=True
+        )
+
+        fig.update_layout(
+            template="plotly_dark",
+            plot_bgcolor="#161b22",
+            paper_bgcolor="#0e1117",
+            hovermode="x unified",
+            showlegend=True,
+            legend=dict(
+                font=dict(color="#FFFFFF", size=12, family="Arial Bold"),
+                bgcolor="rgba(27, 31, 36, 0.95)",
+                bordercolor="#F0B90B",
+                borderwidth=1.5,
+                orientation="v",
+                yanchor="top",
+                y=1,
+                xanchor="left",
+                x=1.05
+            ),
+            # แกน X = Date & Time
+            xaxis=dict(
+                title=dict(text="Date & Time", font=dict(color="#FFFFFF", size=12)),
+                tickfont=dict(color="#CCCCCC", size=10),
+                showgrid=True,
+                gridcolor="rgba(255,255,255,0.08)",
+                linecolor="#555555",
+                type="date"
+            ),
+            # แกน Y ซ้าย = Zone Temperature (°C)
+            yaxis=dict(
+                title=dict(text="Zone Temperature (°C)", font=dict(color="#FFFFFF", size=12)),
+                tickfont=dict(color="#CCCCCC", size=10),
+                showgrid=True,
+                gridcolor="rgba(255,255,255,0.08)",
+                zeroline=False,
+                linecolor="#555555",
+                range=[0, 400]
+            ),
+            # แกน Y ขวา = Combustion Air Temp (°C)
+            yaxis2=dict(
+                title=dict(text="Combustion Air Temp (°C)", font=dict(color="#FFA500", size=12)),
+                tickfont=dict(color="#FFA500", size=10),
+                showgrid=False,
+                overlaying="y",
+                side="right",
+                linecolor="#FFA500",
+                range=[0, 150]
+            ),
+            height=500,
+            margin=dict(l=60, r=180, t=30, b=40)
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+        with st.expander("📋 ตรวจสอบและดาวน์โหลดตารางข้อมูลรวมเรียงตามเวลา"):
+            st.dataframe(df)
+            csv_data = df.to_csv(index=False).encode('utf-8', errors='ignore')
+            st.download_button(
+                label="📥 ดาวน์โหลดข้อมูลที่รวมกันแล้วเป็น CSV",
+                data=csv_data,
+                file_name="combined_debinder_data.csv",
+                mime="text/csv"
             )
-
-            st.plotly_chart(fig, use_container_width=True)
-
-            with st.expander("📋 ตรวจสอบและดาวน์โหลดตารางข้อมูลรวมเรียงตามเวลา"):
-                st.dataframe(df)
-                csv_data = df.to_csv(index=False).encode('utf-8', errors='ignore')
-                st.download_button(
-                    label="📥 ดาวน์โหลดข้อมูลที่รวมกันแล้วเป็น CSV",
-                    data=csv_data,
-                    file_name="combined_debinder_data.csv",
-                    mime="text/csv"
-                )
-
-    except Exception as e:
-        st.error(f"❌ เกิดข้อผิดพลาดในการประมวลผลไฟล์: {e}")
 
 else:
     st.info("👈 กรุณาเลือกอัปโหลดไฟล์ (.csv) ที่เมนูด้านซ้าย สามารถเลือกอัปโหลดได้มากกว่า 1 ไฟล์")
