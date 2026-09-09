@@ -12,9 +12,19 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 2. บังคับ Dark Mode CSS
+# 2. บังคับ Dark Mode CSS และซ่อนแถบขาวด้านบน (stHeader / stToolbar)
 st.markdown("""
     <style>
+        /* ซ่อนแถบขาว Header ด้านบน */
+        header[data-testid="stHeader"] {
+            background-color: transparent !important;
+            display: none !important;
+        }
+        [data-testid="stToolbar"] {
+            display: none !important;
+        }
+        
+        /* ตั้งค่าพื้นหลัง Dark Mode */
         html, body, .stApp, [data-testid="stAppViewContainer"] {
             background-color: #0e1117 !important;
             color: #ffffff !important;
@@ -82,7 +92,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 3. ชื่อโปรแกรม
+# 3. แสดงชื่อโปรแกรมหลัก
 st.title("🏭 Recorder NB1 Debinder")
 
 # 4. ฟังก์ชันอ่านไฟล์ทีละบรรทัดและดึงคอลัมน์ตรงๆ
@@ -90,7 +100,6 @@ def parse_single_file(uploaded_file):
     uploaded_file.seek(0)
     raw_bytes = uploaded_file.read()
     
-    # ลอง Decode หาภาษาที่ถูกต้อง
     text_content = None
     for enc in ['cp932', 'shift_jis', 'utf-8', 'tis-620', 'latin1']:
         try:
@@ -103,16 +112,13 @@ def parse_single_file(uploaded_file):
         text_content = raw_bytes.decode('utf-8', errors='ignore')
 
     lines = text_content.splitlines()
-    
     parsed_rows = []
     
     for line in lines:
         line_str = line.strip()
-        # สนใจเฉพาะบรรทัดที่ขึ้นต้นด้วยปี ค.ศ. (เช่น 2026/07/13)
         if line_str.startswith("20") and "," in line_str:
             parts = [p.strip() for p in line_str.split(",")]
             
-            # ต้องมีคอลัมน์อย่างน้อย 17 คอลัมน์ (Index 0 ถึง 16)
             if len(parts) >= 17:
                 try:
                     dt_val = parts[0]
@@ -154,6 +160,19 @@ def process_multiple_files(uploaded_files):
     full_df = full_df.drop_duplicates(subset=["DateTime"]).sort_values("DateTime").reset_index(drop=True)
     return full_df
 
+# ฟังก์ชันแปลง DataFrame เป็น Binary สำหรับดาวน์โหลดเป็นไฟล์ Excel (.xlsx)
+def to_excel_bytes(dataframe):
+    output = io.BytesIO()
+    # ใช้ openpyxl ในการสร้างไฟล์ Excel
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # ตัด Timezone ออกเพื่อให้เขียนลง Excel ได้อย่างปลอดภัย
+        df_export = dataframe.copy()
+        if pd.api.types.is_datetime64_any_dtype(df_export["DateTime"]):
+            df_export["DateTime"] = df_export["DateTime"].dt.strftime('%Y-%m-%d %H:%M:%S')
+        df_export.to_excel(writer, index=False, sheet_name='Debinder Data')
+    output.seek(0)
+    return output.getvalue()
+
 # 5. เมนู Sidebar
 st.sidebar.header("📁 เมนูอัปโหลดข้อมูล")
 
@@ -167,7 +186,7 @@ uploaded_files = st.sidebar.file_uploader(
     accept_multiple_files=True
 )
 
-# 6. แสดงผลกราฟ
+# 6. แสดงผลกราฟและปุ่มเลือกดาวน์โหลด Excel
 if uploaded_files:
     raw_df = process_multiple_files(uploaded_files)
     
@@ -240,7 +259,6 @@ if uploaded_files:
                 xanchor="left",
                 x=1.05
             ),
-            # แกน X = Date & Time
             xaxis=dict(
                 title=dict(text="Date & Time", font=dict(color="#FFFFFF", size=12)),
                 tickfont=dict(color="#CCCCCC", size=10),
@@ -249,7 +267,6 @@ if uploaded_files:
                 linecolor="#555555",
                 type="date"
             ),
-            # แกน Y ซ้าย = Zone Temperature (°C)
             yaxis=dict(
                 title=dict(text="Zone Temperature (°C)", font=dict(color="#FFFFFF", size=12)),
                 tickfont=dict(color="#CCCCCC", size=10),
@@ -259,7 +276,6 @@ if uploaded_files:
                 linecolor="#555555",
                 range=[0, 400]
             ),
-            # แกน Y ขวา = Combustion Air Temp (°C)
             yaxis2=dict(
                 title=dict(text="Combustion Air Temp (°C)", font=dict(color="#FFA500", size=12)),
                 tickfont=dict(color="#FFA500", size=10),
@@ -275,15 +291,32 @@ if uploaded_files:
 
         st.plotly_chart(fig, use_container_width=True)
 
-        with st.expander("📋 ตรวจสอบและดาวน์โหลดตารางข้อมูลรวมเรียงตามเวลา"):
+        # ส่วนตรวจสอบและสร้างตัวเลือกดาวน์โหลด Excel (.xlsx)
+        with st.expander("📋 ตรวจสอบและเลือกดาวน์โหลดตารางข้อมูล Excel (.xlsx)"):
             st.dataframe(df)
-            csv_data = df.to_csv(index=False).encode('utf-8', errors='ignore')
-            st.download_button(
-                label="📥 ดาวน์โหลดข้อมูลที่รวมกันแล้วเป็น CSV",
-                data=csv_data,
-                file_name="combined_debinder_data.csv",
-                mime="text/csv"
-            )
+            
+            st.markdown("---")
+            st.markdown("##### 📥 ตัวเลือกการดาวน์โหลดไฟล์ Excel")
+            
+            col_opt1, col_opt2 = st.columns([2, 1])
+            with col_opt1:
+                custom_filename = st.text_input(
+                    "ตั้งชื่อไฟล์ดาวน์โหลด:", 
+                    value="combined_debinder_data.xlsx"
+                )
+                if not custom_filename.endswith('.xlsx'):
+                    custom_filename += '.xlsx'
+                    
+            with col_opt2:
+                st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                excel_bytes = to_excel_bytes(df)
+                st.download_button(
+                    label="📊 ดาวน์โหลดไฟล์ Excel",
+                    data=excel_bytes,
+                    file_name=custom_filename,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
 
 else:
     st.info("👈 กรุณาเลือกอัปโหลดไฟล์ (.csv) ที่เมนูด้านซ้าย สามารถเลือกอัปโหลดได้มากกว่า 1 ไฟล์")
