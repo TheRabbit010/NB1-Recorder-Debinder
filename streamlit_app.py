@@ -107,78 +107,57 @@ def read_csv_safe(uploaded_file):
     string_io = io.StringIO(text_content)
     return pd.read_csv(string_io, header=None, low_memory=False, on_bad_lines='skip')
 
-# 5. ฟังก์ชันสแกนและดึงข้อมูลอัจฉริยะ (เพิ่มการแปลง DateTime ที่ยืดหยุ่นขึ้น)
+# 5. ฟังก์ชันสแกนและดึงข้อมูลอัจฉริยะ (ปรับแก้การอ่าน Header และ DateTime)
 def parse_single_file(uploaded_file):
     raw_df = read_csv_safe(uploaded_file)
 
     data_start_row = 0
-    date_pattern = re.compile(r'\d{2,4}[-/]\d{1,2}[-/]\d{1,2}')
+    header_row_idx = None
+    date_pattern = re.compile(r'\d{2,4}[-/]\d{1,2}[-/]\d{1,2}\s+\d{1,2}:\d{2}:\d{2}')
 
-    # ค้นหาจุดเริ่มต้นของข้อมูลที่มีวันที่จริง
+    # ค้นหาแถวที่เป็น Header และแถวเริ่มต้นข้อมูล
     for r in range(len(raw_df)):
-        first_cell = str(raw_df.iloc[r, 0]).strip()
-        second_cell = str(raw_df.iloc[r, 1]).strip() if raw_df.shape[1] > 1 else ""
+        row_str = " ".join(raw_df.iloc[r].fillna('').astype(str))
         
-        if first_cell.startswith("#EndHeader"):
-            data_start_row = r + 1
-            break
-        elif date_pattern.search(first_cell) or date_pattern.search(second_cell):
+        if "#EndHeader" in row_str or "TH_CH1" in row_str:
+            header_row_idx = r
+            
+        first_cell = str(raw_df.iloc[r, 0]).strip()
+        if date_pattern.search(first_cell):
             data_start_row = r
             break
+
+    # หากหาแถวไม่เจอ ให้กำหนดค่าเริ่มต้นความปลอดภัย
+    if data_start_row == 0:
+        data_start_row = header_row_idx + 1 if header_row_idx is not None else 1
 
     header_df = raw_df.iloc[:data_start_row].copy()
     data_df = raw_df.iloc[data_start_row:].copy().reset_index(drop=True)
 
-    def scan_channel_col(ch_num, custom_keywords=None):
+    # ฟังก์ชันค้นหาคอลัมน์จาก Header
+    def scan_channel_col(ch_num):
         patterns = [
+            re.compile(rf'TH_CH{ch_num}Ave', re.IGNORECASE),
+            re.compile(rf'TH_CH{ch_num}Max', re.IGNORECASE),
             re.compile(rf'\bCH0*{ch_num}\b', re.IGNORECASE),
-            re.compile(rf'TH_CH{ch_num}', re.IGNORECASE),
             re.compile(rf'ZONE\s*0*{ch_num}\b', re.IGNORECASE)
         ]
-        if custom_keywords:
-            for kw in custom_keywords:
-                patterns.append(re.compile(re.escape(kw), re.IGNORECASE))
 
-        matched_cols = []
-        for col in range(header_df.shape[1]):
+        # รวมข้อความในแต่ละคอลัมน์ช่วง Header
+        for col in range(1, header_df.shape[1]):
             col_cells = header_df[col].fillna('').astype(str).tolist()
-            col_text = " ".join([str(cell) for cell in col_cells])
+            col_text = " ".join(col_cells)
             
-            if any(p.search(col_text) for p in patterns):
-                matched_cols.append(col)
-        
-        if not matched_cols:
-            return None
-        
-        if len(matched_cols) == 1:
-            return matched_cols[0]
-            
-        for col in matched_cols:
-            col_cells = header_df[col].fillna('').astype(str).tolist()
-            col_text = " ".join([str(cell) for cell in col_cells]).upper()
-            if "MAX" in col_text or "AVE" in col_text:
-                return col
-                
-        return matched_cols[0]
+            for p in patterns:
+                if p.search(col_text):
+                    return col
+        return None
 
     df = pd.DataFrame()
 
-    # ลองแปลง DateTime จากหลายๆ รูปแบบ
-    dt_series = pd.Series(dtype='datetime64[ns]')
-    for col_idx in [0, 1]:
-        if col_idx < data_df.shape[1]:
-            s = pd.to_datetime(data_df[col_idx], errors="coerce")
-            if s.notna().sum() > len(data_df) * 0.3:
-                dt_series = s
-                break
-
-    # หากวันที่และเวลาอยู่แยกคอลัมน์กัน (Col 0: Date, Col 1: Time)
-    if dt_series.notna().sum() < len(data_df) * 0.3 and data_df.shape[1] > 1:
-        col0_str = data_df[0].astype(str).str.strip()
-        col1_str = data_df[1].astype(str).str.strip()
-        dt_series = pd.to_datetime(col0_str + " " + col1_str, errors="coerce")
-
-    df["DateTime"] = dt_series
+    # แปลง DateTime จาก คอลัมน์ 0 (รองรับ 'YYYY/MM/DD HH:MM:SS')
+    col0_cleaned = data_df[0].astype(str).str.extract(r'(\d{2,4}[-/]\d{1,2}[-/]\d{1,2}\s+\d{1,2}:\d{2}:\d{2})')[0]
+    df["DateTime"] = pd.to_datetime(col0_cleaned, errors="coerce")
 
     def extract_series(col_idx, min_val=-50.0, max_val=2000.0):
         if col_idx is not None and col_idx < data_df.shape[1]:
@@ -189,12 +168,14 @@ def parse_single_file(uploaded_file):
 
     mapping_info = {}
 
+    # Map Zone 1 - 4
     for i in range(1, 5):
-        c = scan_channel_col(i, custom_keywords=[f"ZONE{i}", f"ZONE {i}"])
+        c = scan_channel_col(i)
         df[f"Zone #{i}"] = extract_series(c, min_val=0.0, max_val=1000.0)
         mapping_info[f"Zone #{i}"] = f"Col {c}" if c is not None else "Not Found"
 
-    c5 = scan_channel_col(5, custom_keywords=["Combus", "Combustion", "Air temp"])
+    # Map Combustion Air Temp (CH 5)
+    c5 = scan_channel_col(5)
     df["Combustion Air Temp"] = extract_series(c5, min_val=0.0, max_val=500.0)
     mapping_info["Combustion Air Temp"] = f"Col {c5}" if c5 is not None else "Not Found"
 
