@@ -12,7 +12,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 2. บังคับ Dark Mode CSS ปรับสีองค์ประกอบทั้งหมดจากสีขาวเป็นสีเทาเข้ม/เทาอ่อน
+# 2. บังคับ Dark Mode CSS และตั้งค่าตัวหนังสือปุ่มดาวน์โหลดเป็นสีขาว
 st.markdown("""
     <style>
         /* ซ่อนแถบขาว Header ด้านบน */
@@ -82,10 +82,6 @@ st.markdown("""
             font-weight: bold !important;
         }
 
-        /* ------------------------------------------------------------------ */
-        /* ปรับแต่งส่วนที่มีสีขาวในภาพเป็นสีเทาอ่อน/เทาเข้ม (Dark-Grey Styling) */
-        /* ------------------------------------------------------------------ */
-
         /* 1. ปรับแถบ Expander */
         [data-testid="stExpander"] {
             background-color: #161b22 !important;
@@ -101,7 +97,7 @@ st.markdown("""
             color: #ffffff !important;
         }
 
-        /* 2. ปรับแต่งตาราง Dataframe จากสีขาวเป็นสีเทา */
+        /* 2. ปรับแต่งตาราง Dataframe */
         [data-testid="stDataFrame"] {
             background-color: #161b22 !important;
             border: 1px solid #30363d !important;
@@ -128,19 +124,31 @@ st.markdown("""
             color: #ffffff !important;
         }
 
-        /* 4. ปรับแต่งปุ่มดาวน์โหลด Excel */
+        /* 4. ปรับแต่งปุ่มดาวน์โหลด Excel (บังคับข้อความให้เป็นสีขาวสด) */
         div.stDownloadButton > button {
             background-color: #21262d !important;
-            color: #F0B90B !important;
-            border: 1px solid #F0B90B !important;
-            font-weight: bold !important;
+            border: 1.5px solid #F0B90B !important;
             border-radius: 6px !important;
+            padding: 8px 16px !important;
             transition: all 0.2s ease-in-out;
+        }
+        div.stDownloadButton > button, 
+        div.stDownloadButton > button *,
+        div.stDownloadButton > button p,
+        div.stDownloadButton > button span {
+            color: #ffffff !important;
+            font-weight: bold !important;
+            font-size: 15px !important;
         }
         div.stDownloadButton > button:hover {
             background-color: #F0B90B !important;
-            color: #000000 !important;
             border-color: #F0B90B !important;
+        }
+        div.stDownloadButton > button:hover,
+        div.stDownloadButton > button:hover *,
+        div.stDownloadButton > button:hover p,
+        div.stDownloadButton > button:hover span {
+            color: #000000 !important;
         }
     </style>
 """, unsafe_allow_html=True)
