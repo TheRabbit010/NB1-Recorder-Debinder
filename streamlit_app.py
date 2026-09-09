@@ -3,6 +3,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 import re
+import io
 
 # 1. ตั้งค่า Page Config เป็นบรรทัดแรกสุด
 st.set_page_config(
@@ -85,31 +86,30 @@ st.markdown("""
 # 3. แสดงชื่อโปรแกรมหลักเสมอ
 st.title("🏭 Recorder NB1 Debinder")
 
-# 4. ฟังก์ชันอ่าน CSV อย่างเดียว (ป้องกันปัญหา Encoding ด้วย Fallback List)
+# 4. ฟังก์ชันอ่าน CSV อย่างปลอดภัยโดยแปลง Byte เป็น String ด้วย errors='ignore'
 def read_csv_safe(uploaded_file):
-    encodings = ['cp932', 'shift_jis', 'utf-8-sig', 'utf-8', 'tis-620', 'latin1', 'iso-8859-1']
+    uploaded_file.seek(0)
+    raw_bytes = uploaded_file.read()
     
-    # วนลูปตามรายการ Encoding ที่พบบ่อยในอุปกรณ์ Recorder
+    # ถอดรหัส Byte ด้วย Encoding ต่างๆ และข้าม Byte ที่เสีย
+    text_content = None
+    encodings = ['cp932', 'shift_jis', 'utf-8-sig', 'utf-8', 'tis-620', 'latin1']
+    
     for enc in encodings:
         try:
-            uploaded_file.seek(0)
-            return pd.read_csv(uploaded_file, header=None, low_memory=False, encoding=enc)
-        except (UnicodeDecodeError, Exception):
+            text_content = raw_bytes.decode(enc)
+            break
+        except UnicodeDecodeError:
             continue
+            
+    if text_content is None:
+        text_content = raw_bytes.decode('utf-8', errors='ignore')
 
-    # หาก Encoding ปรับแล้วยังพบปัญหา ให้ใช้นโยบายแทนที่/ข้ามอักขระที่ไม่ถูกต้อง
-    for err_mode in ['replace', 'ignore']:
-        try:
-            uploaded_file.seek(0)
-            return pd.read_csv(uploaded_file, header=None, low_memory=False, encoding='utf-8', encoding_errors=err_mode)
-        except Exception:
-            continue
+    # แปลง Text เป็น DataFrame ผ่าน StringIO
+    string_io = io.StringIO(text_content)
+    return pd.read_csv(string_io, header=None, low_memory=False, on_bad_lines='skip')
 
-    # ขั้นสุดทาง ให้ข้ามแถวที่ชำรุด
-    uploaded_file.seek(0)
-    return pd.read_csv(uploaded_file, header=None, low_memory=False, on_bad_lines='skip')
-
-# 5. ฟังก์ชันสแกนและดึงข้อมูลอัจฉริยะสำหรับ Debinder (Z#1-4 และ Combustion)
+# 5. ฟังก์ชันสแกนและดึงข้อมูลสำหรับ Debinder
 def parse_single_file(uploaded_file):
     raw_df = read_csv_safe(uploaded_file)
 
@@ -201,7 +201,7 @@ def process_multiple_files(uploaded_files):
     full_df = full_df.drop_duplicates(subset=["DateTime"]).sort_values("DateTime").reset_index(drop=True)
     return full_df, logs
 
-# 6. เมนู Sidebar (ปรับการรับไฟล์ให้รับเฉพาะ CSV)
+# 6. เมนู Sidebar
 st.sidebar.header("📁 เมนูอัปโหลดข้อมูล")
 
 if st.sidebar.button("🧹 เคลียร์ข้อมูลไฟล์เก่าทั้งหมด"):
@@ -318,7 +318,7 @@ if uploaded_files:
 
         with st.expander("📋 ตรวจสอบและดาวน์โหลดตารางข้อมูลรวมเรียงตามเวลา"):
             st.dataframe(df)
-            csv_data = df.to_csv(index=False).encode('utf-8')
+            csv_data = df.to_csv(index=False).encode('utf-8', errors='ignore')
             st.download_button(
                 label="📥 ดาวน์โหลดข้อมูลที่รวมกันแล้วเป็น CSV",
                 data=csv_data,
