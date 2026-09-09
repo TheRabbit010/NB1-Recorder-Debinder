@@ -85,35 +85,34 @@ st.markdown("""
 # 3. แสดงชื่อโปรแกรมหลักเสมอ
 st.title("🏭 Recorder NB1 Debinder")
 
-# 4. ฟังก์ชันอ่านไฟล์อย่างปลอดภัย
+# 4. ฟังก์ชันอ่านไฟล์อย่างปลอดภัย (แก้ไขรองรับ Encoding Errors และไฟล์สลับประเภท)
 def read_excel_safe(uploaded_file):
-    file_name = uploaded_file.name.lower()
+    encodings = ['cp932', 'shift_jis', 'utf-8', 'utf-8-sig', 'tis-620', 'latin1', 'iso-8859-1']
     
-    if file_name.endswith('.csv'):
-        encodings = ['cp932', 'shift_jis', 'utf-8', 'utf-8-sig', 'tis-620', 'latin1']
-        for enc in encodings:
-            try:
-                uploaded_file.seek(0)
-                return pd.read_csv(uploaded_file, header=None, low_memory=False, encoding=enc)
-            except Exception:
-                continue
-        uploaded_file.seek(0)
+    # ลองอ่านแบบ CSV ก่อน (เนื่องจาก Recorder ส่วนใหญ่บันทึกไฟล์ข้อความแม้เปลี่ยนนามสกุล)
+    for enc in encodings:
         try:
-            return pd.read_csv(uploaded_file, header=None, low_memory=False, encoding='utf-8', encoding_errors='ignore')
-        except Exception:
             uploaded_file.seek(0)
-            return pd.read_csv(uploaded_file, header=None, low_memory=False, on_bad_lines='skip')
-    
+            return pd.read_csv(uploaded_file, header=None, low_memory=False, encoding=enc)
+        except Exception:
+            continue
+
+    # ลองอ่านแบบ Excel Sheet จริง
+    engines = ['openpyxl', 'xlrd', None]
+    for eng in engines:
+        try:
+            uploaded_file.seek(0)
+            return pd.read_excel(uploaded_file, header=None, engine=eng)
+        except Exception:
+            continue
+
+    # หากยังอ่านไม่ได้ ให้ข้ามบรรทัดที่มีปัญหาด้วย ignore/skip
+    uploaded_file.seek(0)
     try:
-        uploaded_file.seek(0)
-        return pd.read_excel(uploaded_file, header=None, engine='openpyxl')
+        return pd.read_csv(uploaded_file, header=None, low_memory=False, encoding='utf-8', encoding_errors='ignore')
     except Exception:
-        try:
-            uploaded_file.seek(0)
-            return pd.read_excel(uploaded_file, header=None, engine='xlrd')
-        except Exception:
-            uploaded_file.seek(0)
-            return pd.read_excel(uploaded_file, header=None)
+        uploaded_file.seek(0)
+        return pd.read_csv(uploaded_file, header=None, low_memory=False, on_bad_lines='skip')
 
 # 5. ฟังก์ชันสแกนและดึงข้อมูลอัจฉริยะสำหรับ Debinder (Z#1-4 และ Combustion)
 def parse_single_file(uploaded_file):
